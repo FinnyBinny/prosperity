@@ -7,6 +7,7 @@ Runs in three phases based on market time (or --phase flag):
   market     : 9:35 AM-3:45 PM ET — active trading + position monitoring
   crypto     : any time — 24/7 crypto scalping
   eod        : 4:00 PM ET — close positions + journal + RCA
+  overnight  : 10:00 PM-5:00 AM ET — market research + learning while you sleep
 
 Usage:
   python main.py                    # auto-dispatch based on current time
@@ -14,13 +15,8 @@ Usage:
   python main.py --phase market
   python main.py --phase crypto
   python main.py --phase eod
+  python main.py --phase overnight  # force overnight learning
   python main.py --phase status     # just print account status + journal
-
-Cron setup (all times ET):
-  0 6  * * 1-5   cd /path/to/prosperity && python main.py --phase premarket
-  */15 9-15 * * 1-5  cd /path/to/prosperity && python main.py --phase market
-  5 16 * * 1-5   cd /path/to/prosperity && python main.py --phase eod
-  */30 * * * *   cd /path/to/prosperity && python main.py --phase crypto
 """
 import argparse
 import logging
@@ -40,6 +36,7 @@ from trader.notifier import Notifier
 from trader.strategies.momentum import MomentumStrategy
 from trader.strategies.news_catalyst import NewsCatalystStrategy
 from trader.strategies.crypto_scalp import CryptoScalpStrategy
+from trader.overnight_learner import OvernightLearner
 
 # Configure logging
 logging.basicConfig(
@@ -68,10 +65,51 @@ def build_components():
     return alpaca, journal, risk, brain, executor, analyzer, notifier
 
 
+def run_overnight(journal, brain, notifier):
+    """
+    Overnight phase (10 PM – 5 AM ET):
+    Claude studies the markets while you sleep — sector flows, earnings
+    catalysts forming, technical setups, crypto momentum, trade review.
+    Findings are saved and loaded as extra context by pre-market next morning.
+    Runs only once per night (skips if already completed).
+    """
+    logger.info("=== PHASE: OVERNIGHT LEARNING ===")
+    from rich.console import Console
+    console = Console()
+    console.print("\n[bold cyan]OVERNIGHT LEARNING SESSION[/bold cyan]")
+    console.print("[dim]Claude is studying the markets while you sleep...[/dim]\n")
+
+    learner = OvernightLearner(journal, brain)
+    research = learner.run()
+
+    synthesis = research.get("synthesis", {})
+    outlook = synthesis.get("market_outlook", "unknown")
+    pre_watchlist = synthesis.get("pre_watchlist", [])
+    new_insight = synthesis.get("new_insight", "")
+    patterns = synthesis.get("patterns_learned", [])
+
+    console.print(f"  Tomorrow's outlook:  [bold]{outlook.upper()}[/bold]")
+    console.print(f"  Pre-watchlist:       {', '.join(w['symbol'] for w in pre_watchlist)}")
+    if new_insight:
+        console.print(f"  New insight:         [italic]{new_insight}[/italic]")
+    if patterns:
+        console.print(f"  New rules added:     {len(patterns)}")
+    console.print("\n[dim]Research saved — pre-market will load it tomorrow morning.[/dim]")
+
+    notifier.send_email(
+        f"Overnight Research — {outlook.upper()} outlook for tomorrow",
+        f"Outlook: {outlook}\n{synthesis.get('outlook_reasoning', '')}\n\n"
+        f"Pre-watchlist: {', '.join(w['symbol'] + ' (' + w['reason'] + ')' for w in pre_watchlist)}\n\n"
+        f"New insight: {new_insight}\n\n"
+        f"Risks: {'; '.join(synthesis.get('risk_factors', []))}"
+    )
+
+
 def run_premarket(alpaca, journal, risk, brain, executor, analyzer, notifier):
     """
     Pre-market phase (6:00-9:30 AM ET):
-    - Pull all market intelligence
+    - Load last night's overnight research
+    - Pull fresh market intelligence
     - Run AI analysis to build watchlist
     - No trading yet
     """
@@ -81,9 +119,20 @@ def run_premarket(alpaca, journal, risk, brain, executor, analyzer, notifier):
     risk.set_daily_start_value(account["portfolio_value"])
     notifier.print_startup_banner(account)
 
-    # Gather market intelligence
+    # Load overnight research if available
+    learner = OvernightLearner(journal, brain)
+    overnight = learner.get_morning_brief()
+    if overnight.get("synthesis"):
+        logger.info("Loaded overnight research from last night's learning session")
+
+    # Gather fresh market intelligence
     logger.info("Gathering market intelligence...")
     brief = analyzer.build_market_brief()
+
+    # Merge overnight pre-watchlist into brief as additional context
+    if overnight.get("synthesis", {}).get("pre_watchlist"):
+        brief["overnight_pre_watchlist"] = overnight["synthesis"]["pre_watchlist"]
+        brief["overnight_outlook"] = overnight["synthesis"].get("market_outlook", "")
 
     # Run AI pre-market analysis
     logger.info("Running Claude pre-market analysis...")
@@ -437,12 +486,20 @@ def auto_dispatch(alpaca, journal, risk, brain, executor, analyzer, notifier):
 
     logger.info(f"Auto-dispatch: {now.strftime('%A %H:%M')} ET")
 
+    # Overnight window: 10 PM – 5 AM ET (runs once per night, skips if done)
+    is_overnight = hour >= 22 or hour < 5
+    if is_overnight:
+        run_overnight(journal, brain, notifier)
+        if config.ENABLE_CRYPTO:
+            run_crypto(alpaca, journal, risk, brain, executor, analyzer, notifier)
+        return
+
     if not is_weekday:
-        logger.info("Weekend — running crypto phase only")
+        logger.info("Weekend daytime — running crypto only")
         run_crypto(alpaca, journal, risk, brain, executor, analyzer, notifier)
         return
 
-    if 6 <= hour < 9 or (hour == 9 and minute < 30):
+    if 5 <= hour < 9 or (hour == 9 and minute < 30):
         run_premarket(alpaca, journal, risk, brain, executor, analyzer, notifier)
     elif (hour == 9 and minute >= 35) or (10 <= hour < 15) or (hour == 15 and minute <= 45):
         run_market(alpaca, journal, risk, brain, executor, analyzer, notifier)
@@ -460,7 +517,7 @@ def main():
     parser = argparse.ArgumentParser(description="Prosperity AI Trader")
     parser.add_argument(
         "--phase",
-        choices=["premarket", "market", "crypto", "eod", "status", "auto"],
+        choices=["premarket", "market", "crypto", "eod", "overnight", "status", "auto"],
         default="auto",
         help="Which phase to run (default: auto-detect from time)",
     )
@@ -486,6 +543,7 @@ def main():
         "market": lambda: run_market(alpaca, journal, risk, brain, executor, analyzer, notifier),
         "crypto": lambda: run_crypto(alpaca, journal, risk, brain, executor, analyzer, notifier),
         "eod": lambda: run_eod(alpaca, journal, risk, brain, executor, analyzer, notifier),
+        "overnight": lambda: run_overnight(journal, brain, notifier),
         "status": lambda: run_status(alpaca, journal, notifier),
         "auto": lambda: auto_dispatch(alpaca, journal, risk, brain, executor, analyzer, notifier),
     }

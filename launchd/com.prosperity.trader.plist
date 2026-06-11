@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.prosperity.trader</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>PLACEHOLDER_DIR/run.sh</string>
+    </array>
+
+    <!-- Run every 15 minutes (900 seconds) around the clock -->
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <!-- Start immediately when loaded, don't wait for first interval -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Restart if it crashes -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Keep running even after errors -->
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+
+    <key>StandardOutPath</key>
+    <string>PLACEHOLDER_DIR/logs/launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>PLACEHOLDER_DIR/logs/launchd_error.log</string>
+
+    <!-- Working directory -->
+    <key>WorkingDirectory</key>
+    <string>PLACEHOLDER_DIR</string>
+</dict>
+</plist>
