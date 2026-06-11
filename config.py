@@ -27,11 +27,6 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 ANALYSIS_MODEL = "claude-opus-4-8"       # Deep analysis, RCA, strategy
 FAST_MODEL = "claude-haiku-4-5-20251001"  # Quick intra-day decisions
 
-# Reddit
-REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID", "")
-REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET", "")
-REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "prosperity-trader/1.0")
-
 # News APIs
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")

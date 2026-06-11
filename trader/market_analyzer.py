@@ -19,23 +19,13 @@ logger = logging.getLogger(__name__)
 
 
 class MarketAnalyzer:
-    def __init__(self):
-        self.reddit = self._init_reddit()
+    # Reddit's public JSON API — no OAuth needed, just a browser-like User-Agent
+    _REDDIT_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; prosperity-trader/1.0)"}
+    # StockTwits trending — fully public, no key required
+    _STOCKTWITS_TRENDING_URL = "https://api.stocktwits.com/api/2/trending/symbols.json"
 
-    def _init_reddit(self):
-        if not config.REDDIT_CLIENT_ID:
-            return None
-        try:
-            import praw
-            return praw.Reddit(
-                client_id=config.REDDIT_CLIENT_ID,
-                client_secret=config.REDDIT_CLIENT_SECRET,
-                user_agent=config.REDDIT_USER_AGENT,
-                read_only=True,
-            )
-        except Exception as e:
-            logger.warning(f"Reddit init failed: {e}")
-            return None
+    def __init__(self):
+        pass
 
     def fetch_news(self, max_articles: int = 30) -> list[dict]:
         """Fetch headlines from RSS feeds and NewsAPI."""
@@ -110,26 +100,66 @@ class MarketAnalyzer:
         return unique[:max_articles]
 
     def fetch_reddit_sentiment(self, max_posts: int = 50) -> list[dict]:
-        """Get top Reddit posts from trading subreddits."""
-        if not self.reddit:
-            return []
+        """
+        Fetch hot posts from trading subreddits via Reddit's public JSON API.
+        No API credentials needed — uses the same unauthenticated endpoint
+        that any browser sees at reddit.com/r/wallstreetbets/hot.json.
+        """
         posts = []
-        for sub_name in config.SENTIMENT_SUBREDDITS[:3]:
+        per_sub = max(5, max_posts // len(config.SENTIMENT_SUBREDDITS))
+        for sub_name in config.SENTIMENT_SUBREDDITS:
             try:
-                sub = self.reddit.subreddit(sub_name)
-                for post in sub.hot(limit=max_posts // 3):
-                    if post.score > 50:
-                        posts.append({
-                            "subreddit": sub_name,
-                            "title": post.title,
-                            "score": post.score,
-                            "num_comments": post.num_comments,
-                            "url": post.url,
-                            "created_utc": datetime.fromtimestamp(post.created_utc).isoformat(),
-                        })
+                url = f"https://www.reddit.com/r/{sub_name}/hot.json"
+                resp = requests.get(
+                    url,
+                    headers=self._REDDIT_HEADERS,
+                    params={"limit": per_sub},
+                    timeout=10,
+                )
+                if not resp.ok:
+                    logger.debug(f"Reddit {sub_name}: HTTP {resp.status_code}")
+                    continue
+                children = resp.json().get("data", {}).get("children", [])
+                for child in children:
+                    d = child.get("data", {})
+                    score = d.get("score", 0)
+                    if score < 20:
+                        continue
+                    posts.append({
+                        "subreddit": sub_name,
+                        "title": d.get("title", ""),
+                        "score": score,
+                        "num_comments": d.get("num_comments", 0),
+                        "url": d.get("url", ""),
+                        "created_utc": datetime.fromtimestamp(
+                            d.get("created_utc", 0)
+                        ).isoformat(),
+                    })
             except Exception as e:
                 logger.debug(f"Reddit error for r/{sub_name}: {e}")
         return sorted(posts, key=lambda x: x["score"], reverse=True)[:max_posts]
+
+    def fetch_stocktwits_trending(self) -> list[dict]:
+        """
+        StockTwits trending symbols — free public endpoint, no auth required.
+        Returns list of {symbol, watchlist_count, messages_count}.
+        """
+        try:
+            resp = requests.get(self._STOCKTWITS_TRENDING_URL, timeout=10)
+            if not resp.ok:
+                return []
+            symbols = resp.json().get("symbols", [])
+            return [
+                {
+                    "symbol": s.get("symbol", ""),
+                    "title": s.get("title", ""),
+                    "watchlist_count": s.get("watchlist_count", 0),
+                }
+                for s in symbols
+            ]
+        except Exception as e:
+            logger.debug(f"StockTwits trending error: {e}")
+            return []
 
     def get_symbol_news(self, symbol: str) -> list[dict]:
         """Get news specific to a ticker symbol."""
@@ -323,5 +353,6 @@ class MarketAnalyzer:
             "market_overview": self.get_market_overview(),
             "top_news": self.fetch_news(20),
             "reddit_sentiment": self.fetch_reddit_sentiment(30),
+            "stocktwits_trending": self.fetch_stocktwits_trending(),
             "top_movers": self.scan_for_movers(),
         }
